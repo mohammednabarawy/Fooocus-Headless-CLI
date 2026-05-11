@@ -95,3 +95,28 @@ Style presets are loaded from `Fooocus/sdxl_styles/*.json`. The special style
 - **Extreme Speed**: ~8 steps, ~5 seconds (lower quality)
 
 Model loading adds ~2-5 seconds on first run; subsequent runs reuse loaded models.
+
+## Best Practices for Arabic & Non-Latin Text Rendering
+
+Fooocus (SDXL) naturally struggles with complex Arabic ligatures and right-to-left scripts compared to closed-source alternatives. When tasked with generating Arabic text, employ the following strategies:
+
+### 1. Advanced Prompting (Supported in CLI)
+*   **Clear Syntax:** Provide the exact text and specify the language/script. Example: *"A professional poster with bold Arabic text 'مرحبا بالعالم' in elegant Naskh calligraphy, high contrast, clear legible letters, right-to-left script"*
+*   **Weights & Descriptors:** Use weighting to enforce the text constraint: *(Arabic text:1.3), perfect spelling, sharp typography, legible letters, no distortion*.
+*   **Negative Prompting:** Always use strong negative prompts: *blurry text, deformed letters, disconnected Arabic script, wrong spelling, Latin gibberish, low quality text*.
+*   **Styles & Settings:** Use the `Fooocus V2` style preset. Higher `--cfg-scale` (4–8) and higher `--steps` (30–60 via Quality mode) improve structural coherence.
+
+### 2. Custom Models & LoRAs (Supported in CLI)
+*   Use typography-specific SDXL LoRAs (e.g., search for `text`, `typography`, `logo`, or `font` LoRAs on Civitai).
+*   Look for Middle Eastern/Arabic fine-tuned base models or calligraphy LoRAs.
+*   Apply them using `--lora "filename:weight"` or `--base-model "filename"`.
+
+### 3. Image Prompting / ControlNet (Requires Script Extension or UI)
+*   **Highly Recommended:** The most effective way to render precise Arabic text is to use **Image Prompts** combined with **CPDS** (Contrast Preserving Decolorization Structure) or **PyraCanny** ControlNets.
+*   Generate a clean reference image containing the exact Arabic text (e.g., via a Python script using Pillow and a TTF font).
+*   *Note: This feature is not currently exposed in the basic CLI arguments. To implement this autonomously, you must either modify `fooocus_cli_direct.py` to accept Image Prompts, or utilize the Fooocus WebUI.*
+
+### 4. Hybrid Post-Processing (Agentic Workflow)
+*   Generate a base image with the desired aesthetic but generic text.
+*   Use a separate Python script with an imaging library (like PIL/Pillow or OpenCV) to overlay perfectly rendered TTF Arabic text onto the generated image.
+*   *(Optional)* Run the composite image through Fooocus Inpainting (requires extending the CLI) to blend the text naturally into the environment.
