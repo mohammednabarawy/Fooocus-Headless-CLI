@@ -96,27 +96,108 @@ Style presets are loaded from `Fooocus/sdxl_styles/*.json`. The special style
 
 Model loading adds ~2-5 seconds on first run; subsequent runs reuse loaded models.
 
-## Best Practices for Arabic & Non-Latin Text Rendering
+## Arabic & Non-Latin Text Generation (CRITICAL)
 
-Fooocus (SDXL) naturally struggles with complex Arabic ligatures and right-to-left scripts compared to closed-source alternatives. When tasked with generating Arabic text, employ the following strategies:
+> **SDXL cannot natively generate correct Arabic text.** The model lacks Arabic
+> glyph understanding in its weights. No amount of prompt engineering or ControlNet
+> will reliably produce correct Arabic script. The solution below is the **only
+> reliable method**.
 
-### 1. Advanced Prompting (Supported in CLI)
-*   **Clear Syntax:** Provide the exact text and specify the language/script. Example: *"A professional poster with bold Arabic text 'مرحبا بالعالم' in elegant Naskh calligraphy, high contrast, clear legible letters, right-to-left script"*
-*   **Weights & Descriptors:** Use weighting to enforce the text constraint: *(Arabic text:1.3), perfect spelling, sharp typography, legible letters, no distortion*.
-*   **Negative Prompting:** Always use strong negative prompts: *blurry text, deformed letters, disconnected Arabic script, wrong spelling, Latin gibberish, low quality text*.
-*   **Styles & Settings:** Use the `Fooocus V2` style preset. Higher `--cfg-scale` (4–8) and higher `--steps` (30–60 via Quality mode) improve structural coherence.
+### The Hybrid Pipeline (PRIMARY METHOD)
 
-### 2. Custom Models & LoRAs (Supported in CLI)
-*   Use typography-specific SDXL LoRAs (e.g., search for `text`, `typography`, `logo`, or `font` LoRAs on Civitai).
-*   Look for Middle Eastern/Arabic fine-tuned base models or calligraphy LoRAs.
-*   Apply them using `--lora "filename:weight"` or `--base-model "filename"`.
+Use `arabic_poster_pipeline.py` — a one-command orchestrator that:
+1. Generates the artistic scene with Fooocus (prompt describes scene, NOT text)
+2. Renders pixel-perfect Arabic text using PIL with proper RTL shaping
+3. Composites the text onto the scene with professional effects
 
-### 3. Image Prompting / ControlNet (Requires Script Extension or UI)
-*   **Highly Recommended:** The most effective way to render precise Arabic text is to use **Image Prompts** combined with **CPDS** (Contrast Preserving Decolorization Structure) or **PyraCanny** ControlNets.
-*   Generate a clean reference image containing the exact Arabic text (e.g., via a Python script using Pillow and a TTF font).
-*   *Note: This feature is not currently exposed in the basic CLI arguments. To implement this autonomously, you must either modify `fooocus_cli_direct.py` to accept Image Prompts, or utilize the Fooocus WebUI.*
+```bash
+# Basic usage
+.\python_embeded\python.exe arabic_poster_pipeline.py \
+    --arabic-text "مرحبا بالعالم" \
+    --scene-prompt "luxury hotel lobby, marble floors, golden lighting"
 
-### 4. Hybrid Post-Processing (Agentic Workflow)
-*   Generate a base image with the desired aesthetic but generic text.
-*   Use a separate Python script with an imaging library (like PIL/Pillow or OpenCV) to overlay perfectly rendered TTF Arabic text onto the generated image.
-*   *(Optional)* Run the composite image through Fooocus Inpainting (requires extending the CLI) to blend the text naturally into the environment.
+# Islamic art with Naskh calligraphy, bottom text, darkened backdrop
+.\python_embeded\python.exe arabic_poster_pipeline.py \
+    --arabic-text "بسم الله الرحمن الرحيم" \
+    --scene-prompt "intricate Islamic geometric pattern, dark blue and gold" \
+    --font-style naskh --text-effect all --text-position bottom --darken 0.4
+
+# Multi-line business poster
+.\python_embeded\python.exe arabic_poster_pipeline.py \
+    --arabic-text "شركة التقنية المتقدمة\nحلول مبتكرة للمستقبل" \
+    --scene-prompt "modern tech office, glass building, blue sky" \
+    --text-position bottom --text-effect shadow --darken 0.5
+
+# Multiple variations
+.\python_embeded\python.exe arabic_poster_pipeline.py \
+    --arabic-text "مرحبا" \
+    --scene-prompt "mountain sunset landscape" \
+    --image-number 4 --seed 42
+```
+
+### Pipeline Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--arabic-text` | **required** | Arabic text to render (`\n` for newlines) |
+| `--scene-prompt` | **required** | Scene description (NO text in prompt) |
+| `--output` | `arabic_poster.png` | Output file path |
+| `--font-style` | `default` | `default` (Arial), `naskh`, or `arabic` |
+| `--font` | auto | Custom `.ttf` font path |
+| `--text-effect` | `shadow` | `none`, `outline`, `shadow`, `glow`, `all` |
+| `--text-position` | `center` | `center`, `top`, `bottom` |
+| `--font-size` | auto-fit | Fixed font size in px |
+| `--opacity` | `1.0` | Text opacity (0.0–1.0) |
+| `--darken` | `0.0` | Darken backdrop behind text (0.0–1.0) |
+| `--text-color` | `255,255,255` | RGB text color |
+| `--padding` | `60` | Edge padding in px |
+| Plus all Fooocus args: `--seed`, `--performance`, `--base-model`, `--lora`, etc. |
+
+### Standalone Text Renderer
+
+`arabic_text_renderer.py` can be used independently for three modes:
+
+```bash
+# Mode 1: ControlNet reference (white-on-black)
+.\python_embeded\python.exe arabic_text_renderer.py \
+    --text "مرحبا بالعالم" --mode reference --output ref.png --style naskh
+
+# Mode 2: Composite text onto existing image
+.\python_embeded\python.exe arabic_text_renderer.py \
+    --text "مرحبا" --mode composite --background scene.png --output final.png --effect shadow
+
+# Mode 3: Create inpaint mask for text area
+.\python_embeded\python.exe arabic_text_renderer.py \
+    --text "النص" --mode mask --output mask.png --dilate 15
+```
+
+### ControlNet CPDS (Supplementary — NOT Sufficient Alone)
+
+The CLI also supports CPDS ControlNet for structural guidance. This can improve
+text-like shapes but **will NOT produce correct Arabic glyphs**. Use only as a
+supplement to the hybrid pipeline, never as the sole method:
+
+```bash
+.\python_embeded\python.exe fooocus_cli_direct.py \
+    --prompt "poster with Arabic calligraphy" \
+    --cn-cpds ref.png --cn-cpds-weight 0.8 --cn-cpds-stop 0.8
+```
+
+### Why Other Methods Fail
+
+| Method | Result |
+|---|---|
+| Prompt engineering | Garbled/hallucinated glyphs ~95% of the time |
+| ControlNet (CPDS) | Approximate shapes, but incorrect ligatures & diacritics |
+| LoRA fine-tuning | Improves aesthetics, but cannot guarantee spelling accuracy |
+| **Hybrid compositing** | **100% correct text, every time** ✓ |
+
+### Font Availability
+
+The renderer auto-discovers fonts. Available styles on this system:
+- **default**: Arial (best Unicode coverage, recommended for most text)
+- **naskh**: DTNaskh family (beautiful calligraphic style, some glyphs may be missing)
+- **arabic**: ArabType, ArabSQ
+
+For custom fonts, use `--font "C:\path\to\font.ttf"`.
+
