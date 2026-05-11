@@ -46,23 +46,8 @@ class MockGradio:
 shared.gradio_root = MockGradio()
 
 # ============================================================
-# IMPORT FOOOCUS INTERNALS
+# PARSE ARGS FIRST (before Fooocus imports and hijacks sys.argv)
 # ============================================================
-try:
-    import modules.config
-    import modules.default_pipeline as pipeline
-    import modules.flags as flags
-    import modules.util as util
-    import modules.patch as patch_module
-    from modules.patch import PatchSettings, patch_settings, patch_all
-    import ldm_patched.modules.model_management as model_management
-    from modules.sdxl_styles import apply_style
-except ImportError as e:
-    print(f"CRITICAL ERROR: Could not import Fooocus modules: {e}")
-    traceback.print_exc()
-    sys.exit(1)
-
-
 def get_args():
     parser = argparse.ArgumentParser(
         description="Fooocus Headless CLI - Generate images without the web UI",
@@ -111,7 +96,38 @@ Examples:
                         help="Disable preview generation (default: True for CLI)")
     parser.add_argument("--output-format", default="png", choices=["png", "jpg", "webp"],
                         help="Output image format")
-    return parser.parse_args()
+    parser.add_argument("--cn-cpds", default=None,
+                        help="Path to reference image for CPDS ControlNet (great for text/structure)")
+    parser.add_argument("--cn-cpds-weight", type=float, default=0.7,
+                        help="Weight for CPDS ControlNet (default: 0.7)")
+    parser.add_argument("--cn-cpds-stop", type=float, default=0.75,
+                        help="Stop step (0.0 to 1.0) for CPDS ControlNet (default: 0.75)")
+    return parser.parse_known_args()
+
+# Parse our custom args and strip them from sys.argv before Fooocus imports
+cli_args, remaining_argv = get_args()
+sys.argv = [sys.argv[0]] + remaining_argv
+
+# ============================================================
+# IMPORT FOOOCUS INTERNALS
+# ============================================================
+try:
+    import modules.config
+    import modules.core as core
+    import modules.default_pipeline as pipeline
+    import modules.flags as flags
+    import modules.util as util
+    import modules.patch as patch_module
+    from modules.patch import PatchSettings, patch_settings, patch_all
+    import ldm_patched.modules.model_management as model_management
+    from modules.sdxl_styles import apply_style
+    
+    import cv2
+    import extras.preprocessors as preprocessors
+except ImportError as e:
+    print(f"CRITICAL ERROR: Could not import Fooocus modules: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 
 def parse_aspect_ratio(ar_string):
@@ -277,6 +293,36 @@ def run_cli_generation(args):
         )
 
         # ===========================================================
+        # STEP 7.5: Apply ControlNets (e.g., CPDS for text structure)
+        # ===========================================================
+        if args.cn_cpds:
+            controlnet_cpds_path = modules.config.downloading_controlnet_cpds()
+
+            print(f"[CLI] Loading CPDS ControlNet image from {args.cn_cpds}...")
+            cn_img = cv2.imread(args.cn_cpds)
+            if cn_img is None:
+                print(f"[WARNING] Could not load CPDS image at {args.cn_cpds}. Skipping CPDS.")
+            else:
+                cn_img = cv2.cvtColor(cn_img, cv2.COLOR_BGR2RGB)
+                cn_img = util.resize_image(util.HWC3(cn_img), width=width, height=height)
+                cn_img = preprocessors.cpds(cn_img)
+                cn_img = util.HWC3(cn_img)
+                cn_pytorch = core.numpy_to_pytorch(cn_img)
+
+                print("[CLI] Refreshing ControlNet models...")
+                pipeline.refresh_controlnets([controlnet_cpds_path])
+
+                print(f"[CLI] Applying CPDS ControlNet (weight={args.cn_cpds_weight}, stop={args.cn_cpds_stop})")
+                c, uc = core.apply_controlnet(
+                    c, uc,
+                    pipeline.loaded_ControlNets[controlnet_cpds_path],
+                    cn_pytorch,
+                    args.cn_cpds_weight,
+                    0.0,
+                    args.cn_cpds_stop
+                )
+
+        # ===========================================================
         # STEP 8: Generate images
         # ===========================================================
         switch = int(steps * args.refiner_switch)
@@ -360,8 +406,7 @@ def run_cli_generation(args):
 
 if __name__ == "__main__":
     try:
-        args = get_args()
-        paths = run_cli_generation(args)
+        paths = run_cli_generation(cli_args)
         # Print final output as JSON for programmatic consumption
         import json
         print(f"\n__OUTPUT_JSON__={json.dumps(paths)}")
