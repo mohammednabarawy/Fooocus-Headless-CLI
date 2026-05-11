@@ -533,7 +533,9 @@ class ArabicTextRenderer:
         result = Image.alpha_composite(bg, txt_layer)
         result.convert("RGB").save(output_path, quality=95)
         print(f"[TextRenderer] Composited image saved: {output_path}")
-        return output_path
+        
+        actual_font_size = font_size if font_size else actual_size
+        return output_path, actual_font_size
 
     def create_text_mask(
         self,

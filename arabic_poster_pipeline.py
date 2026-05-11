@@ -176,7 +176,7 @@ def build_harmonize_prompt(args, scene_prompt):
     return _append_unique_phrases("", phrases)
 
 
-def export_high_res_with_optional_text(final_path, args, temp_dir, index=0):
+def export_high_res_with_optional_text(final_path, args, temp_dir, actual_font_size=None, index=0):
     """
     Resize final output for 2K/4K-style delivery and optionally repaint crisp text.
 
@@ -217,7 +217,7 @@ def export_high_res_with_optional_text(final_path, args, temp_dir, index=0):
 
     if getattr(args, "crisp_export_text", False):
         scaled_padding = round(args.padding * (target_w / src_w))
-        scaled_font_size = round(args.font_size * (target_w / src_w)) if args.font_size else None
+        scaled_font_size = round(actual_font_size * (target_w / src_w)) if actual_font_size else None
         repair_path = os.path.join(temp_dir, f"crisp_export_text_{int(time.time())}_{index}.png")
         print("[PIPELINE] Final crisp text pass")
         run_text_compositing(
@@ -226,7 +226,7 @@ def export_high_res_with_optional_text(final_path, args, temp_dir, index=0):
             output_path=repair_path,
             font_style=args.font_style,
             font_path=args.font,
-            effect=args.text_effect,
+            effect="none",  # Prevent double shadows/duplicate layers
             position=args.text_position,
             font_size=scaled_font_size,
             opacity=getattr(args, "export_text_opacity", 1.0),
@@ -456,7 +456,7 @@ def run_text_compositing(
 
     tc = tuple(int(c) for c in text_color.split(","))
 
-    renderer.composite_text_on_image(
+    out_path, actual_font_size = renderer.composite_text_on_image(
         text=arabic_text,
         background_path=background_path,
         output_path=output_path,
@@ -472,8 +472,8 @@ def run_text_compositing(
         max_lines=max_lines,
     )
 
-    print(f"  Composited: {output_path}")
-    return output_path
+    print(f"  Composited: {out_path} (Font Size: {actual_font_size})")
+    return out_path, actual_font_size
 
 
 def create_text_reference(
@@ -685,7 +685,7 @@ def run_full_pipeline(args):
         else:
             composite_path = out_path
 
-        run_text_compositing(
+        _, actual_font_size = run_text_compositing(
             arabic_text=args.arabic_text,
             background_path=scene_path,
             output_path=composite_path,
@@ -737,9 +737,9 @@ def run_full_pipeline(args):
                     output_path=repair_path,
                     font_style=args.font_style,
                     font_path=args.font,
-                    effect=args.text_effect,
+                    effect="none",  # Prevent double shadows/duplicate layers
                     position=args.text_position,
-                    font_size=args.font_size,
+                    font_size=actual_font_size,
                     opacity=args.final_text_pass,
                     darken=0.0,
                     padding=args.padding,
@@ -750,7 +750,7 @@ def run_full_pipeline(args):
                 )
                 shutil.copy2(repair_path, out_path)
 
-        export_high_res_with_optional_text(out_path, args, temp_dir, i)
+        export_high_res_with_optional_text(out_path, args, temp_dir, actual_font_size, i)
         final_paths.append(out_path)
 
     mode = "harmonized" if args.harmonize > 0 else "composited"
