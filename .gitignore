@@ -1,0 +1,50 @@
+# =============================================
+# Fooocus CLI - Git Ignore
+# =============================================
+
+# --- LARGE BINARIES (never track) ---
+python_embeded/
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.bin
+*.onnx
+*.gguf
+*.zip
+
+# --- Model directories (symlinked or downloaded) ---
+# Exclude the whole models directory...
+Fooocus/models/*
+# ...but explicitly include the configs
+!Fooocus/models/configs/
+
+Fooocus/models_backup/
+
+# --- Generated outputs ---
+outputs/
+Fooocus/outputs/
+
+# --- Temp / cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.tmp
+*.log
+Fooocus/temp/
+.cache/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# --- Environment ---
+.env
+.antigravityignore

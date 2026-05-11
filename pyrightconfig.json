@@ -1,0 +1,6 @@
+{
+    "extraPaths": [
+        "./Fooocus"
+    ],
+    "typeCheckingMode": "basic"
+}
