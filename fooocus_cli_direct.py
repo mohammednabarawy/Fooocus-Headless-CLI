@@ -102,6 +102,11 @@ Examples:
                         help="Weight for CPDS ControlNet (default: 0.7)")
     parser.add_argument("--cn-cpds-stop", type=float, default=0.75,
                         help="Stop step (0.0 to 1.0) for CPDS ControlNet (default: 0.75)")
+    # img2img / Vary mode - used for text harmonization
+    parser.add_argument("--input-image", default=None,
+                        help="Input image for img2img mode (e.g., composited text image to harmonize)")
+    parser.add_argument("--vary-strength", type=float, default=0.4,
+                        help="Denoise strength for img2img (0.0=no change, 1.0=full regenerate. 0.3-0.5 for harmonization)")
     return parser.parse_known_args()
 
 # Parse our custom args and strip them from sys.argv before Fooocus imports
@@ -323,14 +328,49 @@ def run_cli_generation(args):
                 )
 
         # ===========================================================
-        # STEP 8: Generate images
+        # STEP 8: Prepare img2img latent (if input-image provided)
+        # ===========================================================
+        initial_latent = None
+        denoise_strength = 1.0
+
+        if args.input_image:
+            print(f"[CLI] Loading input image for img2img: {args.input_image}")
+            input_img = cv2.imread(args.input_image)
+            if input_img is None:
+                print(f"[ERROR] Could not load input image: {args.input_image}")
+                sys.exit(1)
+            input_img = cv2.cvtColor(input_img, cv2.COLOR_BGR2RGB)
+            input_img = util.HWC3(input_img)
+
+            # Resize to match target resolution
+            from modules.util import set_image_shape_ceil, get_image_shape_ceil, resize_image
+            input_img = resize_image(input_img, width=width, height=height)
+
+            # VAE encode to get initial latent
+            initial_pixels = core.numpy_to_pytorch(input_img)
+            candidate_vae, _ = pipeline.get_candidate_vae(
+                steps=steps,
+                switch=int(steps * args.refiner_switch),
+                denoise=args.vary_strength,
+                refiner_swap_method="joint"
+            )
+            initial_latent = core.encode_vae(vae=candidate_vae, pixels=initial_pixels)
+            denoise_strength = args.vary_strength
+            B, C, H, W = initial_latent['samples'].shape
+            width = W * 8
+            height = H * 8
+            print(f"[CLI] img2img mode: denoise={denoise_strength}, latent resolution={width}x{height}")
+
+        # ===========================================================
+        # STEP 9: Generate images
         # ===========================================================
         switch = int(steps * args.refiner_switch)
         all_images = []
 
         for i in range(args.image_number):
             current_seed = seed + i
-            print(f"\n[CLI] === Generating image {i + 1}/{args.image_number} (seed={current_seed}) ===")
+            mode_label = f"img2img (denoise={denoise_strength})" if initial_latent else "txt2img"
+            print(f"\n[CLI] === Generating image {i + 1}/{args.image_number} (seed={current_seed}, {mode_label}) ===")
 
             # Ensure interrupt flag is clear before each image
             model_management.interrupt_current_processing(False)
@@ -349,8 +389,8 @@ def run_cli_generation(args):
                 callback=callback,
                 sampler_name=args.sampler,
                 scheduler_name=args.scheduler,
-                latent=None,
-                denoise=1.0,
+                latent=initial_latent,
+                denoise=denoise_strength,
                 tiled=False,
                 cfg_scale=args.cfg_scale,
                 refiner_swap_method="joint",
@@ -360,7 +400,7 @@ def run_cli_generation(args):
             print(f"  Image {i + 1} generated successfully")
 
         # ===========================================================
-        # STEP 9: Save images
+        # STEP 10: Save images
         # ===========================================================
         print(f"\n[CLI] Saving {len(all_images)} image(s)...")
 

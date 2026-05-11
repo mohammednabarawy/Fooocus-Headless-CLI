@@ -106,9 +106,9 @@ Model loading adds ~2-5 seconds on first run; subsequent runs reuse loaded model
 ### The Hybrid Pipeline (PRIMARY METHOD)
 
 Use `arabic_poster_pipeline.py` — a one-command orchestrator that:
-1. Generates the artistic scene with Fooocus (prompt describes scene, NOT text)
-2. Renders pixel-perfect Arabic text using PIL with proper RTL shaping
-3. Composites the text onto the scene with professional effects
+1. **Generates** the artistic scene with Fooocus (prompt describes scene, NOT text)
+2. **Composites** pixel-perfect Arabic text using PIL with proper RTL shaping
+3. **Harmonizes** the text by piping the composite back into Fooocus using `img2img` at a low denoise strength, allowing the model to blend the text into the scene's lighting, textures, and style.
 
 ```bash
 # Basic usage
@@ -121,6 +121,12 @@ Use `arabic_poster_pipeline.py` — a one-command orchestrator that:
     --arabic-text "بسم الله الرحمن الرحيم" \
     --scene-prompt "intricate Islamic geometric pattern, dark blue and gold" \
     --font-style naskh --text-effect all --text-position bottom --darken 0.4
+
+# High-fidelity blended text using Harmonization (img2img at 0.35 denoise)
+.\python_embeded\python.exe arabic_poster_pipeline.py \
+    --arabic-text "بسم الله الرحمن الرحيم" \
+    --scene-prompt "intricate Islamic geometric pattern, dark blue and gold" \
+    --font-style naskh --harmonize 0.35
 
 # Multi-line business poster
 .\python_embeded\python.exe arabic_poster_pipeline.py \

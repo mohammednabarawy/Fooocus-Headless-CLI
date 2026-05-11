@@ -4,12 +4,13 @@ correct Arabic text using Fooocus.
 
 THE FUNDAMENTAL TRUTH: SDXL cannot natively generate correct Arabic text.
 The model lacks Arabic glyph understanding in its weights. This pipeline
-solves the problem by splitting the work:
+solves the problem with a 3-step process:
 
   1. GENERATE: Fooocus creates the artistic scene/background (no text)
-  2. RENDER:   PIL renders pixel-perfect Arabic text with proper shaping
-  3. COMPOSITE: Text is overlaid onto the scene with professional effects
-  4. (OPTIONAL) HARMONIZE: Fooocus inpainting blends text edges naturally
+  2. COMPOSITE: PIL renders pixel-perfect Arabic text onto the scene
+  3. HARMONIZE: Fooocus img2img at low denoise blends the text into
+     the scene's style/lighting/texture — making it look PAINTED IN,
+     not pasted on top.
 
 Usage:
     python arabic_poster_pipeline.py \\
@@ -21,7 +22,7 @@ Usage:
         --arabic-text "بسم الله الرحمن الرحيم" \\
         --scene-prompt "elegant Islamic geometric pattern background, dark blue and gold" \\
         --text-position bottom --text-effect shadow --darken 0.4 \\
-        --output islamic_art.png
+        --harmonize 0.35 --output islamic_art.png
 """
 
 import os
@@ -33,6 +34,27 @@ import json
 import glob
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _run_fooocus_cmd(cmd, label="Fooocus"):
+    """Run a Fooocus CLI command and parse output paths."""
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+
+    if result.returncode != 0:
+        print(f"[PIPELINE] {label} FAILED!")
+        print(f"  STDERR: {result.stderr[-500:]}")
+        print(f"  STDOUT: {result.stdout[-500:]}")
+        return []
+
+    # Parse output paths from JSON marker
+    paths = []
+    for line in result.stdout.splitlines():
+        if "__OUTPUT_JSON__=" in line:
+            json_str = line.split("__OUTPUT_JSON__=", 1)[1]
+            paths = json.loads(json_str)
+            break
+
+    return paths
 
 
 def run_fooocus_generation(
@@ -53,7 +75,6 @@ def run_fooocus_generation(
     cn_cpds=None,
     cn_cpds_weight=0.7,
     cn_cpds_stop=0.75,
-    steps=None,
 ):
     """
     Run Fooocus image generation via the CLI.
@@ -100,23 +121,8 @@ def run_fooocus_generation(
     print(f"{'='*60}")
     print(f"  Prompt: {prompt[:100]}...")
     print(f"  Resolution: {width}x{height}")
-    print(f"  Running: {' '.join(cmd[:6])}...")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
-
-    if result.returncode != 0:
-        print(f"[PIPELINE] Fooocus generation FAILED!")
-        print(f"  STDERR: {result.stderr[-500:]}")
-        print(f"  STDOUT: {result.stdout[-500:]}")
-        return []
-
-    # Parse output paths from JSON marker
-    paths = []
-    for line in result.stdout.splitlines():
-        if "__OUTPUT_JSON__=" in line:
-            json_str = line.split("__OUTPUT_JSON__=", 1)[1]
-            paths = json.loads(json_str)
-            break
+    paths = _run_fooocus_cmd(cmd, "Scene generation")
 
     if not paths:
         # Fallback: find most recent files in output dir
@@ -132,6 +138,88 @@ def run_fooocus_generation(
     for p in paths:
         print(f"    -> {p}")
     return paths
+
+
+def run_harmonization(
+    composited_image_path,
+    output_path,
+    prompt,
+    negative_prompt="",
+    width=1152,
+    height=896,
+    denoise_strength=0.35,
+    seed=-1,
+    performance="Speed",
+    styles=None,
+    base_model=None,
+    cfg_scale=7.0,
+    loras=None,
+):
+    """
+    Run Fooocus img2img at LOW denoise to harmonize composited text.
+
+    This is THE KEY STEP that makes the text look painted into the scene
+    rather than pasted on top. At 0.25-0.45 denoise:
+    - The diffusion model re-renders the image lightly
+    - Text inherits scene lighting, texture, color palette
+    - Edges blend naturally
+    - Overall structure (text shape) is preserved
+
+    Args:
+        composited_image_path: The composited image (scene + text overlay)
+        output_path: Where to save the harmonized result
+        prompt: Should describe the desired look ("elegant Arabic calligraphy...")
+        denoise_strength: 0.25-0.45 for best results (too low = no effect, too high = destroys text)
+    """
+    python_exe = os.path.join(PROJECT_ROOT, "python_embeded", "python.exe")
+    cli_script = os.path.join(PROJECT_ROOT, "fooocus_cli_direct.py")
+
+    if not os.path.exists(python_exe):
+        python_exe = sys.executable
+
+    cmd = [
+        python_exe, cli_script,
+        "--prompt", prompt,
+        "--input-image", composited_image_path,
+        "--vary-strength", str(denoise_strength),
+        "--output", os.path.dirname(output_path) or "outputs",
+        "--aspect-ratio", f"{width}x{height}",
+        "--cfg-scale", str(cfg_scale),
+        "--image-number", "1",
+        "--performance", performance,
+    ]
+
+    if negative_prompt:
+        cmd.extend(["--negative-prompt", negative_prompt])
+    if seed != -1:
+        cmd.extend(["--seed", str(seed)])
+    if styles:
+        cmd.extend(["--styles"] + styles)
+    if base_model:
+        cmd.extend(["--base-model", base_model])
+    if loras:
+        for lora in loras:
+            cmd.extend(["--lora", lora])
+
+    print(f"\n{'='*60}")
+    print(f"[PIPELINE] Step 3: Harmonizing text with scene (denoise={denoise_strength})")
+    print(f"{'='*60}")
+    print(f"  Input: {composited_image_path}")
+    print(f"  Denoise: {denoise_strength}")
+
+    paths = _run_fooocus_cmd(cmd, "Harmonization")
+
+    if paths:
+        # Copy the harmonized result to the desired output path
+        import shutil
+        shutil.copy2(paths[0], output_path)
+        print(f"  Harmonized: {output_path}")
+        return output_path
+    else:
+        print(f"  [WARNING] Harmonization failed, using composited image as final output")
+        import shutil
+        shutil.copy2(composited_image_path, output_path)
+        return output_path
 
 
 def run_text_compositing(
@@ -180,7 +268,7 @@ def run_text_compositing(
         text_area_darken=darken,
     )
 
-    print(f"  Final: {output_path}")
+    print(f"  Composited: {output_path}")
     return output_path
 
 
@@ -191,7 +279,7 @@ def run_full_pipeline(args):
     Workflow:
       1. Generate scene with Fooocus (prompt describes scene WITHOUT text)
       2. Composite Arabic text onto the generated scene
-      3. Save final result
+      3. (Optional) Harmonize with img2img to blend text into scene
     """
     timestamp = int(time.time())
     temp_dir = os.path.join(PROJECT_ROOT, "outputs", "pipeline_temp")
@@ -227,7 +315,7 @@ def run_full_pipeline(args):
         print("\n[PIPELINE] FAILED: No scene images were generated.")
         return []
 
-    # Step 2: Composite text onto each generated scene
+    # Step 2 & 3: Composite text + optional harmonization
     final_paths = []
     for i, scene_path in enumerate(scene_paths):
         if args.image_number > 1:
@@ -240,10 +328,17 @@ def run_full_pipeline(args):
         if not os.path.isabs(out_path):
             out_path = os.path.join(PROJECT_ROOT, out_path)
 
-        result = run_text_compositing(
+        # Step 2: Composite text
+        if args.harmonize > 0:
+            # Save intermediate composite to temp
+            composite_path = os.path.join(temp_dir, f"composite_{timestamp}_{i}.png")
+        else:
+            composite_path = out_path
+
+        run_text_compositing(
             arabic_text=args.arabic_text,
             background_path=scene_path,
-            output_path=out_path,
+            output_path=composite_path,
             font_style=args.font_style,
             font_path=args.font,
             effect=args.text_effect,
@@ -254,10 +349,33 @@ def run_full_pipeline(args):
             padding=args.padding,
             text_color=args.text_color,
         )
-        final_paths.append(result)
 
+        # Step 3: Harmonize (if enabled)
+        if args.harmonize > 0:
+            harmonize_prompt = f"{args.scene_prompt}, beautiful Arabic calligraphy text, elegant typography, integrated text design"
+            harmonize_negative = "blurry text, distorted letters, illegible, low quality"
+
+            run_harmonization(
+                composited_image_path=composite_path,
+                output_path=out_path,
+                prompt=harmonize_prompt,
+                negative_prompt=harmonize_negative,
+                width=args.width,
+                height=args.height,
+                denoise_strength=args.harmonize,
+                seed=args.seed + i if args.seed != -1 else -1,
+                performance=args.performance,
+                styles=args.styles,
+                base_model=args.base_model,
+                cfg_scale=args.cfg_scale,
+                loras=args.lora,
+            )
+
+        final_paths.append(out_path)
+
+    mode = "harmonized" if args.harmonize > 0 else "composited"
     print(f"\n{'='*60}")
-    print(f"[PIPELINE] COMPLETE! {len(final_paths)} image(s) with correct Arabic text")
+    print(f"[PIPELINE] COMPLETE! {len(final_paths)} {mode} image(s) with Arabic text")
     print(f"{'='*60}")
     for p in final_paths:
         print(f"  -> {p}")
@@ -270,36 +388,44 @@ def main():
         description="Arabic Poster Pipeline - Generate images with correct Arabic text",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-The pipeline works in two phases:
+The pipeline works in three phases:
   1. Fooocus generates the artistic scene (WITHOUT text in the image)
   2. Perfect Arabic text is composited on top with professional effects
+  3. (Optional) Fooocus img2img re-renders at low denoise to HARMONIZE
+     the text into the scene's style, lighting, and texture
 
-This guarantees 100%% correct Arabic text because the text is rendered
-programmatically using proper RTL shaping, not generated by the AI model.
+The harmonization step is what makes text look PAINTED INTO the scene
+rather than pasted on top. Use --harmonize 0.3 to 0.45 for best results.
 
 Examples:
-  # Basic usage
+  # Basic (composite only, fast)
   python arabic_poster_pipeline.py \\
       --arabic-text "مرحبا بالعالم" \\
       --scene-prompt "luxury restaurant interior, warm lighting, elegant"
 
-  # Islamic art with Naskh calligraphy
+  # With harmonization (text looks integrated into scene)
+  python arabic_poster_pipeline.py \\
+      --arabic-text "مرحبا بالعالم" \\
+      --scene-prompt "luxury restaurant interior, warm lighting, elegant" \\
+      --harmonize 0.35
+
+  # Islamic art with Naskh calligraphy, harmonized
   python arabic_poster_pipeline.py \\
       --arabic-text "بسم الله الرحمن الرحيم" \\
-      --scene-prompt "intricate Islamic geometric pattern, dark blue and gold, arabesque" \\
-      --font-style naskh --text-effect all --darken 0.3
+      --scene-prompt "intricate Islamic geometric pattern, dark blue and gold" \\
+      --font-style naskh --text-effect all --darken 0.3 --harmonize 0.3
 
-  # Business poster with text at bottom
+  # Business poster (no harmonization needed for clean backgrounds)
   python arabic_poster_pipeline.py \\
       --arabic-text "شركة التقنية المتقدمة\\nحلول مبتكرة للمستقبل" \\
-      --scene-prompt "modern tech office, glass building, blue sky, professional" \\
+      --scene-prompt "modern tech office, glass building, blue sky" \\
       --text-position bottom --text-effect shadow --darken 0.5
 
   # Multiple variations
   python arabic_poster_pipeline.py \\
       --arabic-text "مرحبا" \\
       --scene-prompt "mountain sunset landscape" \\
-      --image-number 4 --seed 42
+      --image-number 4 --seed 42 --harmonize 0.35
         """
     )
 
@@ -314,6 +440,11 @@ Examples:
                         help="Output file path")
     parser.add_argument("--width", type=int, default=1152, help="Image width")
     parser.add_argument("--height", type=int, default=896, help="Image height")
+
+    # Harmonization
+    parser.add_argument("--harmonize", type=float, default=0.0,
+                        help="Harmonization strength (0=disabled, 0.25-0.45=recommended). "
+                             "Makes text look PAINTED INTO the scene via low-denoise img2img.")
 
     # Text styling
     parser.add_argument("--font-style", default="default",
