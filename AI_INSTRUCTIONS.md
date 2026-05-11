@@ -34,6 +34,11 @@
 | `--scheduler` | string | `karras` | Noise scheduler |
 | `--lora` | string | none | LoRA as `filename:weight` (repeatable) |
 | `--steps` | int | none | Override performance steps |
+| `--list-models` | flag | false | Print installed checkpoints, LoRAs, VAEs, ControlNets, presets, and styles |
+| `--list-fonts` | flag | false | Print installed system fonts usable with `--font` |
+| `--list-inventory` | flag | false | Print both model and font inventory |
+| `--inventory-json` | flag | false | Machine-readable inventory output |
+| `--dry-run` | flag | false | Print resolved model/prompt settings without loading diffusion models |
 
 ## Examples
 
@@ -62,11 +67,22 @@
 
 ## Available Models
 
-Models are located in `Fooocus/models/checkpoints/`. The default base model
-is configured in `Fooocus/modules/config.py`. Common models:
+Models are located in `Fooocus/models/checkpoints/`. Always inspect the live
+inventory before choosing a model:
 
-- `juggernautXL_v8Rundiffusion.safetensors` (default)
-- Check `Fooocus/models/checkpoints/` for all available models
+```bash
+.\fooocus-cli.bat --list-models
+.\arabic-poster-cli.bat --list-models
+.\arabic-poster-cli.bat --list-inventory --inventory-json
+```
+
+Common useful local checkpoints in this install include:
+
+- `juggernautXL_v8Rundiffusion.safetensors` for general SDXL work
+- `RealVisXL_V5.0_fp16.safetensors` or `realvisxlV50_v50Bakedvae.safetensors` for realistic ad/product scenes
+- `epicrealismXL_vxiAbeast.safetensors` for cinematic realism
+- `realisticStockPhoto_v20.safetensors` for commercial stock-photo style
+- `dreamshaper_8.safetensors` and `majicmixRealistic_v7_sd1.5.safetensors` are SD1.5-era files and may not fit every SDXL workflow
 
 LoRA files are in `Fooocus/models/loras/`.
 
@@ -109,6 +125,24 @@ Use `arabic_poster_pipeline.py` — a one-command orchestrator that:
 1. **Generates** the artistic scene with Fooocus (prompt describes scene, NOT text)
 2. **Composites** pixel-perfect Arabic text using PIL with proper RTL shaping
 3. **Harmonizes** the text by piping the composite back into Fooocus using `img2img` at a low denoise strength, allowing the model to blend the text into the scene's lighting, textures, and style.
+
+For best CLI results, prefer the batch wrapper and a preset:
+
+```bash
+.\arabic-poster-cli.bat \
+    --preset pro_text \
+    --arabic-text "مستقبل الذكاء الاصطناعي" \
+    --scene-prompt "premium technology poster" \
+    --subject "glass AI assistant device on a desk" \
+    --composition "centered product with clean negative space for headline" \
+    --lighting "soft studio lighting with realistic reflections" \
+    --output "outputs/arabic_ai_poster.png"
+```
+
+`--preset pro_text` enables the high-fidelity text workflow: Quality mode,
+low-denoise harmonization, CPDS text-structure guidance, and one final crisp
+Arabic repaint after export so glyphs stay readable without duplicate text
+layers. It exports at 2x size by default.
 
 ```bash
 # Basic usage
@@ -157,6 +191,14 @@ Use `arabic_poster_pipeline.py` — a one-command orchestrator that:
 | `--darken` | `0.0` | Darken backdrop behind text (0.0–1.0) |
 | `--text-color` | `255,255,255` | RGB text color |
 | `--padding` | `60` | Edge padding in px |
+| `--preset` | `balanced` | `balanced`, `pro_text`, `clean_graphic`, or `neon_sign` |
+| `--prompt-profile` | `none` | `nano_banana_pro`, `image2`, `product_ad`, `infographic`, `cinematic`, or `signage` |
+| `--subject`, `--composition`, `--lighting`, etc. | none | Optional creative-brief fields compiled into a clearer generation prompt |
+| `--final-text-pass` | preset-based | Re-overlay exact shaped text after harmonization (`0` disables) |
+| `--text-guide` | `none` | CPDS text reference for `scene`, `harmonize`, or `both` |
+| `--max-lines` | none | Wrap and shrink text to fit a target line count |
+| `--no-wrap` | false | Disable automatic Arabic word wrapping |
+| `--export-scale`, `--export-width`, `--export-height` | `1.0` | Final high-resolution export controls, capped by `--export-max-side` |
 | Plus all Fooocus args: `--seed`, `--performance`, `--base-model`, `--lora`, etc. |
 
 ### Standalone Text Renderer
@@ -207,3 +249,116 @@ The renderer auto-discovers fonts. Available styles on this system:
 
 For custom fonts, use `--font "C:\path\to\font.ttf"`.
 
+You can now list and use installed system fonts by alias:
+
+```bash
+.\arabic-poster-cli.bat --list-fonts
+.\arabic-poster-cli.bat --list-fonts --font-filter arab
+
+.\arabic-poster-cli.bat \
+    --preset clean_graphic \
+    --arabic-text "القهوة سر الصباح" \
+    --scene-prompt "premium coffee product advertisement" \
+    --font "tahoma" \
+    --output "outputs/coffee_arabic.png"
+```
+
+`--font` accepts a full font path or any alias printed by `--list-fonts`.
+
+## Local Smoke Tests
+
+Use these before reporting changes to the user:
+
+```bash
+.\python_embeded\python.exe -s -m py_compile arabic_poster_pipeline.py arabic_text_renderer.py fooocus_cli_direct.py fooocus_cli_inventory.py test_cli_inventory.py
+.\python_embeded\python.exe -s test_cli_inventory.py
+```
+
+Use dry-run for fast model/preset/font checks:
+
+```bash
+.\arabic-poster-cli.bat --dry-run --preset pro_text --base-model "RealVisXL_V5.0_fp16" --font "decotype naskh" --arabic-text "تصميم فاخر" --scene-prompt "luxury perfume campaign"
+.\fooocus-cli.bat --dry-run --prompt "premium product advertisement, no text" --base-model "juggernautXL_v8Rundiffusion"
+```
+
+## Professional Agent Playbook
+
+When an AI agent is asked to generate professional images with this app:
+
+1. Start in `D:\Fooocus_win64_2-5-0`.
+2. Inspect the real install before choosing assets:
+
+```bash
+.\arabic-poster-cli.bat --list-models --inventory-limit 10
+.\arabic-poster-cli.bat --list-fonts --font-filter arab --inventory-limit 20
+```
+
+3. Use `--dry-run` to resolve the model, font, preset, prompt profile, and export plan.
+4. Generate one image first. Do not batch until the first image completes and the file is readable.
+5. For images that need exact Arabic or any non-Latin text, always use `arabic-poster-cli.bat`, not raw text prompting.
+6. For images with no required exact text, use `fooocus-cli.bat` and explicitly include `no text, no letters, no watermark` when text is unwanted.
+7. Inspect generated backgrounds for accidental fake text/logos. If it appears, strengthen the scene prompt with `blank label surfaces` and the negative prompt with `logo, label text, gibberish text, pseudo text, latin letters`.
+8. Inspect Arabic/text outputs for duplicate text layers. Professional defaults should use only one final repair layer: leave `pro_text` on its default final crisp export repaint, and do not add `--final-text-pass` unless `--no-crisp-export-text` is also used.
+9. Verify outputs by opening/inspecting the produced files, checking dimensions, and confirming the image is nonblank.
+
+Recommended model/preset pairings:
+
+| Goal | CLI | Model | Preset/Profile |
+|---|---|---|---|
+| Arabic product poster | `arabic-poster-cli.bat` | `RealVisXL_V5.0_fp16.safetensors` | `--preset pro_text --prompt-profile nano_banana_pro` |
+| Arabic signage/neon | `arabic-poster-cli.bat` | `juggernautXL_v8Rundiffusion.safetensors` | `--preset neon_sign --prompt-profile signage` |
+| Clean brand/ad graphic | `arabic-poster-cli.bat` | `realisticStockPhoto_v20.safetensors` or `RealVisXL_V5.0_fp16.safetensors` | `--preset clean_graphic --prompt-profile image2` |
+| Cinematic product render without text | `fooocus-cli.bat` | `epicrealismXL_vxiAbeast.safetensors` | `--styles "Fooocus V2" "Fooocus Enhance"` |
+
+Use creative-brief fields instead of one vague prompt:
+
+```bash
+--subject "crystal perfume bottle on black marble"
+--composition "centered product with clean headline space above"
+--lighting "soft studio lighting, gold rim light, realistic reflections"
+--brand-colors "black, champagne gold, ivory"
+--camera "85mm lens, shallow depth of field"
+--materials "glass, polished marble, brushed metal"
+```
+
+## Validated Advanced Runs
+
+These commands completed successfully on this machine.
+
+### Arabic product poster
+
+```bash
+.\arabic-poster-cli.bat --preset pro_text --base-model RealVisXL_V5.0_fp16.safetensors --font "decotype naskh" --arabic-text "تصميم فاخر" --scene-prompt "luxury perfume campaign with an unlabeled blank perfume bottle, blank front surface" --subject "unlabeled crystal perfume bottle on black marble" --composition "centered product with clean headline space above" --lighting "soft studio lighting, gold rim light, realistic reflections" --brand-colors "black, champagne gold, ivory" --negative-prompt "logo, label, label text, bottle text, brand name, fake letters, gibberish" --text-position top --text-effect all --width 896 --height 640 --output outputs\advanced_realvis_perfume_clean.png --seed 1204 --steps 24 --harmonize 0.28 --export-scale 1.5
+```
+
+Result: `outputs\advanced_realvis_perfume_clean.png`, `1344x960`. Completed scene generation, text reference, compositing, harmonization, one final crisp text pass, and resize export. This cleaned version uses stronger blank-label and fake-text negatives after visual inspection found that the first product render had hallucinated small label text on the bottle.
+
+### Arabic neon signage
+
+```bash
+.\arabic-poster-cli.bat --preset neon_sign --base-model juggernautXL_v8Rundiffusion.safetensors --font "ae_arab" --arabic-text "ليلة القهوة" --scene-prompt "premium Arabic cafe neon sign at night" --subject "cozy modern cafe storefront after rain" --composition "wide cinematic storefront with Arabic sign area above entrance" --lighting "neon reflections on wet street, warm interior glow" --prompt-profile signage --text-position top --text-color 255,210,120 --width 896 --height 640 --output outputs\advanced_juggernaut_neon_cafe.png --seed 1202 --steps 20 --harmonize 0.34 --export-scale 1.5
+```
+
+Result: `outputs\advanced_juggernaut_neon_cafe.png`, `1344x960`. Completed scene generation, text reference, compositing, harmonization, one final exact-text pass, and resize export.
+
+### Duplicate text-layer regression test
+
+```bash
+.\arabic-poster-cli.bat --preset pro_text --base-model RealVisXL_V5.0_fp16.safetensors --font "decotype naskh" --arabic-text "اختبار النص" --scene-prompt "minimal luxury product background with blank label surfaces" --subject "simple unlabeled glass bottle" --composition "centered product with top headline space" --negative-prompt "logo, label text, fake text, duplicate text" --text-position top --width 640 --height 448 --output outputs\duplicate_text_fix_test.png --seed 1210 --steps 12 --harmonize 0.24 --export-scale 1
+```
+
+Result: `outputs\duplicate_text_fix_test.png`, `1280x896`. Runtime log confirmed `pro_text` now skips the separate pre-export `Final exact-text pass` and applies only one `Final crisp text pass`.
+
+### Direct product ad
+
+```bash
+.\fooocus-cli.bat --prompt "premium cinematic product advertisement, sculptural wireless headphones on brushed titanium pedestal, soft studio lighting, realistic reflections, shallow depth of field, editorial luxury campaign, no text, no letters, no watermark" --negative-prompt "text, letters, watermark, logo, blurry, low quality" --base-model epicrealismXL_vxiAbeast.safetensors --styles "Fooocus V2" "Fooocus Enhance" --aspect-ratio 896x640 --output outputs\advanced_direct_product --seed 1203 --steps 18 --performance Speed
+```
+
+Result: `outputs\advanced_direct_product\fooocus_1778542656_1203_0.png`, `896x640`. Completed raw headless Fooocus generation and JSON output reporting.
+
+File readability/nonblank check used:
+
+```bash
+.\python_embeded\python.exe -s -c "import sys; sys.path.insert(0, r'D:\Fooocus_win64_2-5-0'); from PIL import Image, ImageStat; paths=[r'outputs\advanced_realvis_perfume_clean.png', r'outputs\advanced_juggernaut_neon_cafe.png', r'outputs\advanced_direct_product\fooocus_1778542656_1203_0.png']; [print(p, Image.open(p).size, ImageStat.Stat(Image.open(p).convert('L')).extrema[0]) for p in paths]"
+```

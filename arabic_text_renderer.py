@@ -22,6 +22,17 @@ import argparse
 import math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from fooocus_cli_inventory import (
+    add_inventory_arguments,
+    find_font_for_style,
+    handle_inventory_arguments,
+    resolve_font_identifier,
+)
+
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -58,8 +69,14 @@ FONT_CATALOG = {
 
 def find_font(style="default", custom_path=None):
     """Find an available font, trying the requested style first then falling back."""
-    if custom_path and os.path.exists(custom_path):
-        return custom_path
+    resolved = resolve_font_identifier(custom_path)
+    if resolved and os.path.exists(resolved):
+        return resolved
+
+    try:
+        return find_font_for_style(style, custom_path=custom_path)
+    except FileNotFoundError:
+        pass
 
     # Try requested style first
     for path in FONT_CATALOG.get(style, []):
@@ -142,6 +159,107 @@ class ArabicTextRenderer:
         bbox = draw.textbbox((0, 0), text, font=font)
         return font, min_size, bbox[2] - bbox[0], bbox[3] - bbox[1]
 
+    def _measure_text(self, draw, text, font):
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1], bbox[1]
+
+    def _split_long_word(self, draw, word, font, max_width):
+        """Split a single oversized word without dropping any characters."""
+        pieces = []
+        current = ""
+        for char in word:
+            candidate = current + char
+            shaped_candidate = shape_arabic(candidate)
+            width, _, _ = self._measure_text(draw, shaped_candidate, font)
+            if current and width > max_width:
+                pieces.append(current)
+                current = char
+            else:
+                current = candidate
+        if current:
+            pieces.append(current)
+        return pieces
+
+    def _wrap_paragraph(self, draw, paragraph, font, max_width):
+        """Word-wrap a raw paragraph, measuring shaped RTL display text."""
+        words = paragraph.split()
+        if not words:
+            return []
+
+        lines = []
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            shaped_candidate = shape_arabic(candidate)
+            width, _, _ = self._measure_text(draw, shaped_candidate, font)
+            if width <= max_width:
+                current = candidate
+                continue
+
+            if current:
+                lines.append(current)
+                current = ""
+
+            shaped_word = shape_arabic(word)
+            word_width, _, _ = self._measure_text(draw, shaped_word, font)
+            if word_width <= max_width:
+                current = word
+            else:
+                lines.extend(self._split_long_word(draw, word, font, max_width))
+
+        if current:
+            lines.append(current)
+        return lines
+
+    def _shape_lines(self, draw, text, font, max_width, wrap=True, max_lines=None):
+        """Return shaped visual lines, optionally auto-wrapped to the text box."""
+        raw_lines = text.split("\\n") if "\\n" in text else text.split("\n")
+        raw_lines = [line.strip() for line in raw_lines if line.strip()]
+        if not raw_lines:
+            raw_lines = [text]
+
+        wrapped = []
+        for raw_line in raw_lines:
+            if wrap:
+                wrapped.extend(self._wrap_paragraph(draw, raw_line, font, max_width))
+            else:
+                wrapped.append(raw_line)
+
+        shaped = [shape_arabic(line) for line in wrapped if line.strip()]
+        if not shaped:
+            shaped = [shape_arabic(text)]
+
+        if max_lines and len(shaped) > max_lines:
+            return shaped, False
+        return shaped, True
+
+    def _fit_text_block(
+        self,
+        draw,
+        text,
+        max_width,
+        max_height,
+        start_size=200,
+        min_size=16,
+        line_spacing=1.4,
+        wrap=True,
+        max_lines=None,
+    ):
+        """Fit a complete text block after Arabic shaping and optional wrapping."""
+        fallback = None
+        for size in range(start_size, min_size - 1, -2):
+            font = ImageFont.truetype(self.font_path, size)
+            shaped_lines, line_count_ok = self._shape_lines(
+                draw, text, font, max_width, wrap=wrap, max_lines=max_lines
+            )
+            metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+            max_lw = max((m[0] for m in metrics), default=0)
+            fallback = (font, size, shaped_lines, metrics, total_h)
+            if line_count_ok and max_lw <= max_width and total_h <= max_height:
+                return fallback
+
+        return fallback
+
     def _compute_multiline(self, draw, lines, font, line_spacing=1.4):
         """Compute total height and per-line metrics for multi-line text."""
         metrics = []
@@ -178,6 +296,8 @@ class ArabicTextRenderer:
         position="center",
         font_size=None,
         line_spacing=1.4,
+        wrap=True,
+        max_lines=None,
     ):
         """
         Render Arabic text onto a solid-color background image.
@@ -197,13 +317,6 @@ class ArabicTextRenderer:
             font_size: Fixed font size (None = auto-fit)
             line_spacing: Multiplier for line height
         """
-        # Shape Arabic text
-        raw_lines = text.split("\\n") if "\\n" in text else text.split("\n")
-        shaped_lines = [shape_arabic(line.strip()) for line in raw_lines if line.strip()]
-
-        if not shaped_lines:
-            shaped_lines = [shape_arabic(text)]
-
         # Create image
         img = Image.new("RGBA", (width, height), bg_color + (255,) if len(bg_color) == 3 else bg_color)
         draw = ImageDraw.Draw(img)
@@ -215,17 +328,21 @@ class ArabicTextRenderer:
         if font_size:
             font = ImageFont.truetype(self.font_path, font_size)
             actual_size = font_size
-        else:
-            # Auto-fit based on longest line
-            longest = max(shaped_lines, key=len)
-            per_line_h = max_text_h / max(len(shaped_lines), 1)
-            font, actual_size, _, _ = self._fit_font_size(
-                draw, longest, max_text_w, int(per_line_h * 0.9),
-                start_size=min(300, height // 2)
+            shaped_lines, _ = self._shape_lines(
+                draw, text, font, max_text_w, wrap=wrap, max_lines=max_lines
             )
-
-        # Compute multi-line metrics
-        metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+            metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+        else:
+            font, actual_size, shaped_lines, metrics, total_h = self._fit_text_block(
+                draw,
+                text,
+                max_text_w,
+                max_text_h,
+                start_size=min(300, height // 2),
+                line_spacing=line_spacing,
+                wrap=wrap,
+                max_lines=max_lines,
+            )
 
         # Compute starting Y based on position
         if isinstance(position, tuple):
@@ -299,6 +416,8 @@ class ArabicTextRenderer:
         opacity=1.0,
         line_spacing=1.4,
         text_area_darken=0.0,
+        wrap=True,
+        max_lines=None,
     ):
         """
         Composite Arabic text directly onto an existing image.
@@ -319,12 +438,6 @@ class ArabicTextRenderer:
         bg = Image.open(background_path).convert("RGBA")
         width, height = bg.size
 
-        # Shape Arabic text
-        raw_lines = text.split("\\n") if "\\n" in text else text.split("\n")
-        shaped_lines = [shape_arabic(line.strip()) for line in raw_lines if line.strip()]
-        if not shaped_lines:
-            shaped_lines = [shape_arabic(text)]
-
         # Create transparent text layer
         txt_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(txt_layer)
@@ -335,16 +448,21 @@ class ArabicTextRenderer:
 
         if font_size:
             font = ImageFont.truetype(self.font_path, font_size)
-        else:
-            longest = max(shaped_lines, key=len)
-            per_line_h = max_text_h / max(len(shaped_lines), 1)
-            font, _, _, _ = self._fit_font_size(
-                draw, longest, max_text_w, int(per_line_h * 0.9),
-                start_size=min(300, height // 2)
+            shaped_lines, _ = self._shape_lines(
+                draw, text, font, max_text_w, wrap=wrap, max_lines=max_lines
             )
-
-        # Multi-line metrics
-        metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+            metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+        else:
+            font, _, shaped_lines, metrics, total_h = self._fit_text_block(
+                draw,
+                text,
+                max_text_w,
+                max_text_h,
+                start_size=min(300, height // 2),
+                line_spacing=line_spacing,
+                wrap=wrap,
+                max_lines=max_lines,
+            )
 
         # Position
         if isinstance(position, tuple):
@@ -428,6 +546,8 @@ class ArabicTextRenderer:
         font_size=None,
         line_spacing=1.4,
         dilate=10,
+        wrap=True,
+        max_lines=None,
     ):
         """
         Create a binary mask image where the text area is white (255) and
@@ -436,12 +556,6 @@ class ArabicTextRenderer:
         Args:
             dilate: Pixels to expand the mask beyond the text edges
         """
-        # Shape text
-        raw_lines = text.split("\\n") if "\\n" in text else text.split("\n")
-        shaped_lines = [shape_arabic(line.strip()) for line in raw_lines if line.strip()]
-        if not shaped_lines:
-            shaped_lines = [shape_arabic(text)]
-
         # Create mask
         mask = Image.new("L", (width, height), 0)
         draw = ImageDraw.Draw(mask)
@@ -451,15 +565,21 @@ class ArabicTextRenderer:
 
         if font_size:
             font = ImageFont.truetype(self.font_path, font_size)
-        else:
-            longest = max(shaped_lines, key=len)
-            per_line_h = max_text_h / max(len(shaped_lines), 1)
-            font, _, _, _ = self._fit_font_size(
-                draw, longest, max_text_w, int(per_line_h * 0.9),
-                start_size=min(300, height // 2)
+            shaped_lines, _ = self._shape_lines(
+                draw, text, font, max_text_w, wrap=wrap, max_lines=max_lines
             )
-
-        metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+            metrics, total_h = self._compute_multiline(draw, shaped_lines, font, line_spacing)
+        else:
+            font, _, shaped_lines, metrics, total_h = self._fit_text_block(
+                draw,
+                text,
+                max_text_w,
+                max_text_h,
+                start_size=min(300, height // 2),
+                line_spacing=line_spacing,
+                wrap=wrap,
+                max_lines=max_lines,
+            )
 
         if isinstance(position, tuple):
             start_x, start_y = position
@@ -511,7 +631,8 @@ Examples:
   python arabic_text_renderer.py --text "السلام عليكم\\nمرحبا بالعالم" --style naskh --effect shadow
         """
     )
-    parser.add_argument("--text", required=True, help="Arabic text to render (use \\\\n for newlines)")
+    add_inventory_arguments(parser)
+    parser.add_argument("--text", default=None, help="Arabic text to render (use \\\\n for newlines)")
     parser.add_argument("--output", default="arabic_reference.png", help="Output image path")
     parser.add_argument("--width", type=int, default=1152, help="Image width")
     parser.add_argument("--height", type=int, default=896, help="Image height")
@@ -536,8 +657,20 @@ Examples:
     parser.add_argument("--padding", type=int, default=60, help="Padding from edges in pixels")
     parser.add_argument("--text-color", default="255,255,255", help="Text color as R,G,B")
     parser.add_argument("--dilate", type=int, default=10, help="Mask dilation in pixels (mask mode only)")
+    parser.add_argument("--no-wrap", action="store_true",
+                        help="Disable automatic word wrapping inside the text area")
+    parser.add_argument("--max-lines", type=int, default=None,
+                        help="Maximum wrapped lines to fit before shrinking the font")
+    parser.add_argument("--line-spacing", type=float, default=1.4,
+                        help="Line spacing multiplier")
 
     args = parser.parse_args()
+
+    if handle_inventory_arguments(args):
+        return
+
+    if not args.text:
+        parser.error("--text is required unless you use --list-fonts, --list-models, or --list-inventory")
 
     # Parse text color
     text_color = tuple(int(c) for c in args.text_color.split(","))
@@ -556,6 +689,9 @@ Examples:
             effect=args.effect,
             position=args.position,
             font_size=args.font_size,
+            line_spacing=args.line_spacing,
+            wrap=not args.no_wrap,
+            max_lines=args.max_lines,
         )
     elif args.mode == "composite":
         if not args.background:
@@ -572,6 +708,9 @@ Examples:
             font_size=args.font_size,
             opacity=args.opacity,
             text_area_darken=args.darken,
+            line_spacing=args.line_spacing,
+            wrap=not args.no_wrap,
+            max_lines=args.max_lines,
         )
     elif args.mode == "mask":
         renderer.create_text_mask(
@@ -583,6 +722,9 @@ Examples:
             position=args.position,
             font_size=args.font_size,
             dilate=args.dilate,
+            line_spacing=args.line_spacing,
+            wrap=not args.no_wrap,
+            max_lines=args.max_lines,
         )
 
 

@@ -22,6 +22,8 @@ import time
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 FOOOCUS_ROOT = os.path.join(PROJECT_ROOT, "Fooocus")
 
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 if FOOOCUS_ROOT not in sys.path:
     sys.path.insert(0, FOOOCUS_ROOT)
 
@@ -34,6 +36,7 @@ os.environ.setdefault("GRADIO_SERVER_PORT", "7865")
 # MOCK GRADIO - Fooocus expects shared.gradio_root to exist
 # ============================================================
 import shared
+from fooocus_cli_inventory import add_inventory_arguments, handle_inventory_arguments, resolve_model_name
 
 class MockGradio:
     """Minimal mock to satisfy shared.gradio_root references."""
@@ -61,13 +64,18 @@ Examples:
   %(prog)s --prompt "mech" --lora "add_detail:0.8" --lora "epi_noiseoffset2:0.5"
         """
     )
-    parser.add_argument("--prompt", required=True, help="Positive prompt for image generation")
+    add_inventory_arguments(parser)
+    parser.add_argument("--prompt", default=None, help="Positive prompt for image generation")
     parser.add_argument("--negative-prompt", default="", help="Negative prompt (things to avoid)")
     parser.add_argument("--output", default="outputs", help="Output directory (relative to project root)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print resolved model/prompt settings without loading diffusion models")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed (-1 for random)")
     parser.add_argument("--performance", default="Speed",
                         choices=["Speed", "Quality", "Extreme Speed"],
                         help="Performance preset (affects step count)")
+    parser.add_argument("--steps", type=int, default=None,
+                        help="Exact diffusion step count (overrides --performance)")
     parser.add_argument("--aspect-ratio", default="1152×896",
                         help="Image dimensions as WIDTHxHEIGHT (e.g., 1024x1024, 1152×896)")
     parser.add_argument("--styles", nargs="+", default=["Fooocus V2"],
@@ -112,6 +120,33 @@ Examples:
 # Parse our custom args and strip them from sys.argv before Fooocus imports
 cli_args, remaining_argv = get_args()
 sys.argv = [sys.argv[0]] + remaining_argv
+
+if handle_inventory_arguments(cli_args):
+    sys.exit(0)
+
+if not cli_args.prompt:
+    print("ERROR: --prompt is required unless you use --list-models, --list-fonts, or --list-inventory")
+    sys.exit(2)
+
+if cli_args.dry_run:
+    base_model = cli_args.base_model
+    resolved = resolve_model_name("checkpoints", base_model) if base_model else None
+    plan = {
+        "prompt": cli_args.prompt,
+        "negative_prompt": cli_args.negative_prompt,
+        "base_model": base_model,
+        "base_model_found": bool(resolved) if base_model else None,
+        "base_model_path": resolved["path"] if resolved else None,
+        "styles": cli_args.styles,
+        "performance": cli_args.performance,
+        "steps": cli_args.steps,
+        "aspect_ratio": cli_args.aspect_ratio,
+        "image_number": cli_args.image_number,
+        "lora": cli_args.lora,
+    }
+    import json
+    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    sys.exit(0)
 
 # ============================================================
 # IMPORT FOOOCUS INTERNALS
@@ -187,7 +222,7 @@ def run_cli_generation(args):
 
         # --- Performance ---
         performance_obj = flags.Performance(args.performance)
-        steps = performance_obj.steps()
+        steps = args.steps if args.steps is not None else performance_obj.steps()
         print(f"[CLI] Performance: {args.performance} ({steps} steps)")
 
         # --- Aspect Ratio ---
