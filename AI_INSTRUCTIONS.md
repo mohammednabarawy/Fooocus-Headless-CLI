@@ -33,8 +33,7 @@
 | `--sampler` | string | `dpmpp_2m_sde_gpu` | Sampler algorithm |
 | `--scheduler` | string | `karras` | Noise scheduler |
 | `--lora` | string | none | LoRA as `filename:weight` (repeatable) |
-| `--vae` | string | `Default (model)` | VAE model name |
-| `--output-format` | choice | `png` | `png` / `jpg` / `webp` |
+| `--steps` | int | none | Override performance steps |
 
 ## Examples
 
@@ -51,8 +50,8 @@
 # With LoRA weights
 .\fooocus-cli.bat --prompt "detailed mech robot" --lora "add_detail:0.8"
 
-# Custom model
-.\fooocus-cli.bat --prompt "landscape" --base-model realisticVisionV60B1_v51VAE.safetensors
+# With specific steps
+.\fooocus-cli.bat --prompt "abstract art" --aspect-ratio 1024x1024 --steps 40
 ```
 
 ## Output
